@@ -6,6 +6,40 @@ build work. Every claim below is cited to the primary source (official docs, mod
 
 ---
 
+## ⚠️ REVISION (2026-09-12) — decision amended to Cohere Transcribe Arabic primary
+
+**Decision (ticket #2):** primary ASR = **CohereLabs/cohere-transcribe-arabic-07-2026** (Apache-2.0,
+2B Conformer encoder-decoder, native `transformers` + vLLM). It is the open Arabic ASR leaderboard
+leader by a wide margin (avg WER 25.87 / CER 11.80 vs Whisper-large-v3 36.86 / 17.21) and handles
+Arabic + English code-switched speech. The earlier `faster-whisper large-v3 + WhisperX` pick is
+demoted to **runner-up**. See section 4a below for the revised pipeline.
+
+**Pipeline shape (diarize-first):**
+1. **VAD / noise gate** (Silero or pyannote) — mandatory: the Cohere card warns it transcribes
+   silences eagerly ("Hallucinations"; a VAD gate is listed as a benefit).
+2. **pyannote `speaker-diarization-community-1`**, `min/max_speakers=2` → labeled turns with
+   timestamps. License verified: **CC-BY-4.0** (commercial-safe); gated access (accept terms + HF token).
+3. **Per-turn transcription** with Cohere, `language="ar"` default, `"en"` fallback on English-dominant
+   turns (model has NO auto language detection — always specify). Long turns auto-split; map
+   `audio_chunk_index` back to the turn.
+4. **Role pass A/B → doctor/patient**: doctor opens + holds longer turns; validate on ~10 real sessions.
+5. Output: **turn-level transcript `(speaker, start, end)`** — the RAG chunk boundary + trust-gate audit unit.
+
+**Capture SOP (feeds #10):** baseline = single in-room mic + software diarization; **target = two-channel
+dual-lapel capture** (channel 1 = doctor, channel 2 = patient) where diarization collapses to channel
+mapping (DER ≈ 0). Do NOT let pyannote downmix stereo — handle channels separately.
+
+**Model caveats (from the Cohere card):** inconsistent performance on code-switched audio; single
+language per utterance (no LID); no timestamps, no speaker diarization, no VAD — all must be supplied
+by the pipeline; silence-hallucination → VAD gate mandatory.
+
+**Language scope decision:** Arabic-primary with English **required** (kept, not dropped).
+
+The body below retains the original research context and evidence in full; the sections marked **rev.**
+are the amended conclusions.
+
+---
+
 ## TL;DR — recommendation
 
 | Role | Pick | Why |
@@ -194,6 +228,49 @@ the clinic's med list. ~$0.21/hr. Ship-in-a-day, but cloud-only → revisit for 
 First concept milestone should be **collecting 20–30 real in-room sessions**, transcribing with the
 primary pick, measuring WER on your own clinical vocabulary — every published number above is from a
 proxy corpus.
+
+---
+
+## 4a. REVISED primary (rev.): Cohere Transcribe Arabic 07-2026, diarize-first
+
+**Open Arabic ASR leaderboard, 2026-07-07** (avg WER · CER; English not the target):
+
+| Model | Avg WER · CER | SADAW | Common Voice | MASC noisy | MGB-2 | Casablanca |
+|---|---|---|---|---|---|---|
+| **Cohere Transcribe Arabic 07-2026** | **25.87 · 11.80** | 37.47 · 23.53 | **5.82 · 1.62** | 27.07 · 10.13 | 15.54 · 8.40 | **49.71 · 20.66** |
+| OmniASR LLM 7B | 28.32 · 12.52 | 41.61 | 8.75 | 29.29 | 14.13 | 56.46 |
+| Qwen3-Omni 30B | 30.71 · 13.67 | 44.82 | 11.46 | 30.85 | **13.09** | 62.55 |
+| Qwen3-ASR 1.7B | 33.36 · 12.33 | 45.53 | 16.90 | 34.29 | 16.57 | 64.47 |
+| Whisper large-v3 | 36.86 · 17.21 | 55.96 | 17.83 | 34.63 | 16.26 | 71.81 |
+
+Source: Open Universal Arabic ASR Leaderboard / `CohereLabs/cohere-transcribe-arabic-07-2026` card.
+Cohere wins on every column except MGB-2 (≈ parity with OmniASR) and Common Voice is 3× better than
+Whisper. On dialect-heavy sets the WER gap is still large (Casablanca 49.7) but CER ≈ half of Whisper —
+character-level content is preserved, good for retrieval.
+
+**Why Cohere over Whisper for this project:** (1) Arabic is the primary language — the leaderboard gap
+is exactly where this product lives; (2) 2B params, Apache-2.0, runs on the same ≤8 GB GPU budget;
+(3) native `transformers`/vLLM serving, no CTranslate2 layer; (4) handles dialectal Arabic without
+aggressive text normalization. **Why not to overtrust it:** code-switch performance is "inconsistent"
+per the card, and English-in-Arabic drug names still need a post-ASR drug-list pass; no LID, no
+timestamps, no diarization, no VAD — the pipeline must supply all four; silence-hallucination makes the
+VAD gate non-optional.
+
+**speed of the swap:** WhisperX's ~30 LOC skeleton is replaced by ~30–50 LOC: VAD → pyannote
+`community-1` (k=2) → per-turn Cohere → role pass. Aligned word timestamps are no longer needed —
+turn boundaries from diarization are the timestamps.
+
+### 4b. REVISED diarization stack (rev.)
+
+| Layer | Pick | License / access | Why |
+|---|---|---|---|
+| Baseline (single-mic) | pyannote `speaker-diarization-community-1`, `num_speakers=2` | CC-BY-4.0, gated (ack + HF token) | RAMC (doctor–patient corpus) 20.8 DER; forced k=2; on-prem; exclusive diarization reconciles with per-turn chunks |
+| High-quality, cloud-only | pyannote `precision-2` | hosted API (pyannoteAI) | RAMC 10.5 DER; data leaves premises → privacy gate |
+| NeMo / Sortformer | NVIDIA, self-host | Apache-2.0 | integrated streaming ASR+diarization; heavier toolchain; only if streaming needed later |
+| API | AssemblyAI `speaker_identification` (Doctor/Patient roles) | SaaS | fastest, cloud-only; staging fallback |
+| **Capture SOP (target)** | **dual-lapel 2-channel** (ch1=doctor, ch2=patient) | hardware | diarization = channel mapping (DER≈0), no crosstalk; do not let pyannote downmix stereo |
+
+Role pass: A/B → doctor/patient via "doctor opens + holds longer turns", validated on ~10 real sessions.
 
 ---
 

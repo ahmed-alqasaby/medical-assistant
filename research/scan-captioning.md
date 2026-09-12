@@ -6,6 +6,21 @@
 
 ---
 
+## ⚠️ SCOPE DECISION (2026-09-12) — DEFERRED (V2+, out of scope for this build)
+
+**Decision (ticket #4):** scan image understanding is **OUT of scope for version 1.** Rationale (product
+owner): scans can't be meaningfully explained by the v1 design; scan interpretation joins as "another
+layer at another version." Version 1 embedded data = **session transcript + confirmed prescriptions +
+text-based lab results**; scans leave the retrieval index entirely.
+
+- This doc is retained as **V2+ design inventory** (the research is still valid evidence for the later layer).
+- Ingestion (#10) is consequently **untied from the vision-model dependency**; `scan-captioning` no
+  longer blocks it. Any V2 design note: the swappable-captioner-interface requirement survives; the
+  trusted/unverified split (modality/region/view trusted vs findings unverified) applies when the layer
+  is built; MedGemma Health-AI ToU verification stands as an open item for that version.
+
+---
+
 ## What This Covers
 
 We need a model that produces **caption text from medical scans** (X-ray, MRI, ultrasound) — not diagnosis, just a text description useful for **RAG retrieval** (embedding the caption so scans are findable via text search). The caption needs enough discriminative content (modality, body region, gross findings) to be useful for retrieval.

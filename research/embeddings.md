@@ -19,6 +19,42 @@
 
 ---
 
+## ⚠️ ADDENDUM (2026-09-12) — decision confirmed; pipeline context added
+
+**Decision (ticket #5):** **bge-m3 confirmed** as the concept-build embedder for the Arabic-primary /
+English-required pipeline. Runner-up `multilingual-e5-large-instruct`; Arabic-ceiling test candidate
+`Swan-Large` deferred (retain §6 eval-set plan).
+
+**Cohere Transcribe Arabic does NOT replace a text embedder.** It is a Conformer *acoustic* encoder +
+decoder trained by cross-entropy on output tokens — no contrastive/siamese objective, no pooled
+semantic embedding head. Its hidden states measure audio similarity, not document relevance. The RAG
+embedder is a separate text model (bge-m3) operating on ASR text.
+
+**Normalization contract (make it the SAME on index & query sides):** ASR output is undiacritized, so
+the retrieval layer MUST strip and normalize consistently — remove diacritics, unify alef variants
+(أ/إ/آ → ا), teh-marbuta (ة → ه), yaeh (ى → ي), strip tatweel/kashida. Applied at index time (turns,
+prescription records, lab results, captions-if-later) and at query time (user questions). Single
+cheapest accuracy lever for Arabic embedding (§3, diacritics).
+
+**RAG paradigm (feeds #11):** layered architecture, not one paradigm:
+1. **Structured patient memory** — relational fields (sessions, confirmed prescriptions, lab results,
+   access grants, scan records) = the "graph without a graph DB".
+2. **Hybrid RAG** — bge-m3 dense+sparse over turn-level chunks, top-k + `bge-reranker-v2-m3` cross-encoder.
+3. **Thin agentic orchestration** — tools = query patient structured fields / vector-search patient
+   turns; cite every claim to `(speaker, timestamp, doc-id)`; refuse anything outside the patient's
+   granted memory.
+4. **GraphRAG deferred** to a later version, but the data model must keep relations explicit (typed
+   edges session→prescription→condition/lab) so a KG is derivable without re-modeling. Cross-patient
+   graph queries remain out of scope (private per-patient retrieval).
+
+**Code-switch reality:** drug names in Latin script inside Arabic sentences match via bge-m3's sparse
+head; the code-switch internal eval set (50–100 queries, §6) is a first-order milestone — it is the only
+evidence for this exact slice, no public benchmark exists.
+
+---
+
+---
+
 ## 1. Candidate Model Landscape
 
 ### 1.1 Open-Source / Local

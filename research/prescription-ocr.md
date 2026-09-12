@@ -10,6 +10,42 @@
 
 ---
 
+## ⚠️ REVISION (2026-09-12) — decision amended to OCR-PRIMARY + HITL + FORMULARY
+
+**Decision (ticket #3):** handwritten Arabic prescriptions ARE the primary capture channel — reversed
+from the e-form-first recommendation below. **Product-fit rationale:** in Egypt/GCC grassroots clinics,
+handwritten prescripts (روشتات) are the intake reality; forcing doctors/patients onto e-forms fails
+adoption where no national mandate exists (Wasfaty's e-form won under Saudi mandate, not by choice).
+
+The research ALLOWES this only in one specific shape — the failure floor (§5) is real. The retained
+chain is:
+
+1. **Capture conditioning (biggest free win):** guided photo SOP — flat, well-lit, full frame, no
+   shadows. The messiness numbers (21–33% exact-word) assume uncontrolled snaps.
+2. **HTR engine:** Azure Document Intelligence (only hosted API claiming Arabic handwriting — 
+   unbenchmarked on medical) **or** a fine-tuned trOCR-class Arabic model. Decide on OUR eval, not vendor
+   claims — no Arabic medical-prescription dataset or benchmark exists (§1.2, §3.2).
+3. **Formulary-constrained post-processing:** every candidate token resolves against the **clinic's
+   medicine list** (Latin names + Arabic transliterations) + digit normalization (Western `8` = Eastern
+   `٨`). This is the only realistic net for dot/digit errors (ب/ت/ث; `mg→vg`). Free-form spell-correction
+   is BANNED — it mutilates OOV drug names. Encourage post-OCR manual correction (the working
+   Arabic-Rx projects all route through a review/feedback loop).
+4. **Structured slot extraction** (drug / dose / frequency / duration) w/ per-slot confidence via Arabic
+   medical NER (CAMeLBERT+CRF F1≈90 only on CLEAN text — OCR noise propagates in).
+5. **Human confirmation gate — NON-NEGOTIABLE:** pharmacist/doctor confirms/corrects the Draft
+   prescription (30-sec UI) before it enters the patient memory. Unconfirmed slots are never retrievable
+   as fact; the assistant never surfaces unconfirmed data. Same HITL pattern as the ASR side.
+6. **Accuracy-gate milestone:** collect N real prescripts (photo + keyed ground truth), measure, then
+   commit the engine. This concept build IS the missing benchmark.
+
+**What still stands from the original recommendation:** e-form remains a *fallback* for illegible
+tickets; the photo is kept in the memory regardless; defer any *autonomous* (no-HITL) HTR — that path is
+exactly what §5 forbids.
+
+---
+
+---
+
 ## 1. State of Arabic handwriting recognition (HTR)
 
 ### 1.1 What exists
