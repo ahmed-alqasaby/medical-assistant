@@ -1,0 +1,18 @@
+[
+  {
+    "id": "ar",
+    "source": "yassinabdulmahdi/arabic-medical-q-and-a-dataset",
+    "license": "MIT",
+    "intended_use": "Arabic-primary medical Q&A — the primary retrieval corpus",
+    "files": [
+      "ar/test.csv",
+      "ar/train.csv",
+      "ar/val.csv"
+    ],
+    "sha256": {
+      "ar/test.csv": "02c271ccedd829fcac57b71b09ca83f2cd0d81d126ee19c99e5043e608aea922",
+      "ar/train.csv": "85a7b2422566fec938eedf6e31df4ed544b270eff9494cf0169af390a7a27146",
+      "ar/val.csv": "053b9a7eaa3330cde3ff21e5e9a431a7607916da14c160c3bf324e936f9c4948"
+    }
+  }
+]

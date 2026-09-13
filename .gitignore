@@ -1,13 +1,31 @@
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
 venv/
+
+# Environments / secrets
 .env
-.env.*
+*.pem
+
+# Data artifacts (never commit corpora or stores)
+data/corpus/**
+!data/corpus/.gitkeep
+!data/corpus/INVENTORY.md
+!data/corpus/registry.json
+data/vector_store/**
+!data/vector_store/.gitkeep
+data/rx_photos/**
+!data/rx_photos/.gitkeep
+!data/rx_photos/INVENTORY.md
+
+# Data staging / downloaded archives
+data/corpus/.work/
+dataset-metadata.json
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
+
+# OS
 .DS_Store
-node_modules/
-dist/
-build/
-.idea/
-.vscode/
-*.egg-info/
