@@ -1,6 +1,7 @@
 # medical-assistant — System Design (v1)
 
 *Status: ready-for-agent. Synthesized from the wayfinder map and locked research decisions (see `research/*.md`). Terms follow `CONTEXT.md`; the four research decision docs are normative where this spec compresses them.*
+*rev. 2026-09-13 — review-pass refinements incorporated: CAG session-primary hybrid, chunk-enrichment + retrieval-index choices, generation-model candidates, tool-trace audit.*
 
 ---
 
@@ -83,7 +84,7 @@ The entire v1 system is **tested through one seam**: the middle-layer generation
 | Module | Responsibility | Locked by |
 |---|---|---|
 | **Ingestion** | session recording → turns (diarize-first ASR); prescription photo → confirmed prescription (HTR + HITL); lab result text → structured record | ASR decision (Cohere primary); prescription decision (OCR-primary + HITL + formulary) |
-| **Patient memory store** | per-patient relational store; the only place facts live; every record traceable to a session | data model (§3) |
+| **Patient memory store** | per-patient relational store; the only place facts live; every record traceable to a session. This is the lightweight **MAG (Memory-Augmented Generation)** layer — the "graph without a graph DB" (§6.1) | data model (§3) |
 | **Retrieval** | structured queries + hybrid vectors + reranker; agentic tool layer; per-patient scoped | embeddings decision (bge-m3) |
 | **Generation (middle layer)** | the three surfaces; grounding + citation + refusal contracts | §5 |
 | **Trust gate** | access grants, revocation, audit, identity key, roster | §4 |
@@ -128,7 +129,13 @@ ConfirmedPrescription { id, session, drug, dose, frequency, duration, instructio
                      confirmed_by, confirmed_at }                          // ONLY post-HITL
 LabResult          { id, session, panel, value, unit, ref_range, recorded_at }
 AccessGrant        { patient, practice, granted_at, granted_from, revoked_at?, scope }
-AuditEvent         { patient, actor, action, turn_ref?, occurred_at }     // what a doctor saw
+AuditEvent         { patient, actor, action, turn_ref?, frame?, tool_call_seq, occurred_at }
+                     // frame = the context frame served (e.g. whole session S); tool_call_seq = ordered
+                     // tool invocations for that actor/request (agentic paths are non-deterministic —
+                     // the audit must be provable, so the trace is recorded, not reconstructed)
+ScanRecord         { id, session, stored_ref, source_turn? }   // metadata ONLY; never embedded
+                     // source_turn = FK to the transcript turn that discussed the scan → scans are
+                     // findable transitively through the turn, never interpreted by a model in v1
 ```
 
 Rules enforced by the store, not by convention:
@@ -137,12 +144,14 @@ Rules enforced by the store, not by convention:
 - Every Turn, ConfirmedPrescription, and LabResult is reachable from exactly one MedicalSession, which is reachable from exactly one Patient.
 - An AccessGrant's scope is expressed over this schema (which sessions / fields), never as free text.
 - No global or cross-patient query surface exists in the storage layer.
+- **Scans are metadata-only records.** A ScanRecord holds the stored file reference and the source turn that discussed it; it is never embedded, captioned, or retrieved as content. The prescription **photo** behaves the same — audit/provenance link, never embedded (mirror of the unconfirmed-draft rule).
+- ConfirmedPrescription and LabResult rows additionally carry a **normalized text template** (§6.2) so structured records participate in retrieval both as fields and as indexed text.
 
 ### 4. The trust gate
 
 - **Request → approve at check-in:** a connected practice requests access; the patient approves at check-in before the consult. Access is earned, not automatic.
 - **Revocation:** patient-initiated, effective immediately; the grant row is closed, and retrieval + generation paths re-check it on every request (no cached authorization).
-- **Audit:** every retrieval a doctor performed is an AuditEvent tied to the turn list actually served; this is the unit the trust gate is provable by.
+- **Audit:** every generation request a doctor makes is an AuditEvent. The event records the **context frame served** (for the CAG path: the whole session loaded; for the RAG path: the turn list returned by each tool call) plus the **ordered tool-call sequence** — agentic paths are non-deterministic, so the trace is logged at request time, not reconstructed later. This is the unit the trust gate is provable by.
 - **Identity key:** the Patient id is the single key linking a patient across connected practices; roster (federation vs single-operator) is flagged as a sub-decision under the gate/shared design, but is not allowed to change the schema above.
 - **Deliberately out of scope:** voiceprint/biometric identity is a conscious future decision, not an ASR byproduct — the v1 system never derives identity signals from session audio.
 
@@ -150,24 +159,36 @@ Rules enforced by the store, not by convention:
 
 Three surfaces over the same store, three distinct contracts:
 
-1. **Pre-visit brief** (`POST /v1/patients/{id}/brief`) — async, over the patient's **full granted memory**; output = the brief + the source list it was built from. Stylized around the confirmed drug list.
-2. **Live grounded Q&A** (`POST /v1/patients/{id}/ask`) — real-time; answer **only from retrieved evidence**; every claim carries a citation; no-invention is a pipeline property.
-3. **Plain-language lens** (`POST /v1/patients/{id}/explain`) — same store, simple-terms generation for the patient.
+1. **Pre-visit brief** (`POST /v1/patients/{id}/brief`) — async, over the patient's **full granted memory**. v1 synthesis is **direct long-context** over all granted turns/records (both generation candidates hold ≥128K context; a full patient history fits); a turn-cluster summary tier is the documented **scale-escape-hatch** only when a patient's granted history exceeds the generation context. The brief carries a source list that resolves to the underlying records — a summary is never cited *instead of* its source turns. Stylized around the confirmed drug list.
+2. **Live grounded Q&A** (`POST /v1/patients/{id}/ask`) — real-time, **session-primary (CAG)**: the **active session's** turns are loaded **directly into the prompt** as a deterministic, cached context frame (no retrieval-miss risk within the session; zero hope that ranking surfaces it); only a question that needs something **outside today's session** routes to the retrieval layer (§6). Every claim still carries a citation resolving to a real turn in the frame.
+3. **Plain-language lens** (`POST /v1/patients/{id}/explain`) — same store, simple-terms generation for the patient. Defaults to full granted memory; accepts a session context to reuse the CAG frame for "what happened today" questions. Never uses the summary tier (must stay grounded to records).
 
 Cross-cutting contracts:
 
 - **Confirmed-data-only grounding:** retrievable facts = confirmed prescriptions, turn-level transcript, lab results. An OCR draft prescription is **never** surfaced by any surface.
-- **Citation format:** `(doc-id, speaker, start_ms, end_ms)` with the quoted turn text; the seam asserts this shape (see Testing).
+- **Citation format:** `(doc-id, speaker, start_ms, end_ms)` with the quoted turn text; the seam asserts this shape (see Testing). The CAG frame satisfies this by construction — the cited turn is literally in the prompt.
 - **Refusal is a contract:** a question outside the patient's grant (or off-record scope) produces a clean refusal, typed as a refusal — not an invented answer, not an error, not a guess.
+- **Session-primary router:** the `ask` surface holds one tool — *history* retrieval. In-session questions never invoke it; the frame is context, not a tool, which is where deterministic behavior is bought back from the agent. The router's in-frame / needs-history split is part of what the audit logs as `tool_call_seq`.
 - **Language:** Arabic-primary output; English permitted; Latin-script drug names preserved verbatim within Arabic output.
+- **Summary tier (RAPTOR-style) is brief-only.** Summarized history is generated text and is **never** an input to live Q&A or the lens — both remain bound to the citation-resolves-to-a-real-turn contract.
 
 ### 6. Retrieval (layered)
 
-1. **Structured patient memory** — relational fields (sessions, confirmed prescriptions, lab results, access grants) = "a graph without a graph DB"; relations explicit for future derivation.
-2. **Hybrid vector RAG** — `bge-m3` dense+sparse over **turn-level** chunks (chunks are diarized turns, not arbitrary splits), top-k + `bge-reranker-v2-m3` cross-encoder on the candidate window (8192-token context noted).
-3. **Thin agentic orchestration** — tools = query patient structured fields / vector-search patient turns; every tool call is scoped per patient and per grant; every claim cited; refusal outside the grant.
+**Chunking (the judgment against our pipeline):**
 
-**Normalization contract (non-negotiable):** identical preprocessing on the **index** and **query** sides — remove diacritics, unify alef variants (أ/إ/آ → ا), teh-marbuta (ة → ه), yaeh (ى → ي), strip tatweel/kashida. ASR output is undiacritized, so this is load-bearing for retrieval quality.
+- **Turn-level is locked and correct** — dialogue chunks are semantic units (`speaker, start, end`), not token windows; this is the chunk boundary *and* the audit unit, so retrieval and audit share one shape.
+- **Short-turn context loss is real** (patients answer "نعم", "تمام") → index-time **contextual enrichment**: each turn's index entry is prefixed with a short, generation-LLM-written context (same normalization contract; the prefix is **index-only**, never returned as answer content or citation text). Implemented with our own generation model — no license or extra-encoder cost. **Late chunking (Jina-style) is rejected for v1**: the canonical implementation rides `jina-embeddings-v3` (CC-BY-NC — the same license trap the generation model §7 avoids) and inserts a second encoder into the loop; bge-m3 has no native late-chunk path — its strength is hybrid sparse+dense within its 8192-token window. Revisit only if the embedder changes. Enrichment-on vs. off is an eval variant on the code-switch set (§ Testing).
+- **Hierarchical retrieval is folded into the CAG session-primary hybrid** (§5): "match at turn level, expand to the current session" collapses into "the current session is already in the prompt (CAG); only history questions route to vectors." Same access pattern, one mechanism, no extra index.
+
+1. **Structured patient memory (MAG layer)** — relational fields (sessions, confirmed prescriptions, lab results, access grants) = "a graph without a graph DB"; relations explicit for future derivation.
+2. **Hybrid vector RAG — typed collections, not one flat index:**
+   - **`turns`** — bge-m3 dense+sparse over turn text, enriched per §6-chunking; top-k + `bge-reranker-v2-m3` cross-encoder.
+   - **`lab_results`** and **`confirmed_prescriptions`** — the same embeddings over their **normalized text templates** (e.g. a prescription renders as a drug/dose/frequency/duration sentence), so structured records are hit by hybrid retrieval *and* by direct field queries. Templating follows the §6.3 normalization contract.
+   - **`scans`** — a **metadata-only** collection: never embedded, never captioned; found only transitively via the `source_turn` pointer when the discussing transcript turn is retrieved. Prescription **photos** are audit/provenance links, never embedded.
+3. **Hybrid fusion** — bge-m3's three internal signals (dense / sparse / multi-vector) are **weighted by query type**, not uniformly: Latin-token queries (drug names) boost sparse; long-form semantic Arabic boosts dense; short queries use late-interaction. Cross-collection results fuse with **Reciprocal Rank Fusion** (default), A/B-tested against a simple weighted convex combination on our eval set before lock-in.
+4. **Thin agentic orchestration** — one history tool (§5 router); every tool call scoped per patient and per grant; every claim cited; refusal outside the grant. The tool-call sequence is written to the AuditEvent, not reconstructed after the fact.
+
+**Normalization contract (non-negotiable):** identical preprocessing on the **index** and **query** sides — remove diacritics, unify alef variants (أ/إ/آ → ا), teh-marbuta (ة → ه), yaeh (ى → ي), strip tatweel/kashida. ASR output is undiacritized, so this is load-bearing for retrieval quality. Applied once for both the bge-m3 inputs and the template strings.
 
 ### 7. End-points and stack inventory
 
@@ -186,14 +207,17 @@ Runtime picks (locked): Cohere Transcribe Arabic 07-2026 (transformers/vLLM, ≤
 
 **Open decisions carried forward (flagged, not locked):**
 
-- The **generation model** for the three surfaces (an Arabic-capable on-prem-capable LLM) — the conversation has not yet selected it. Selection criteria: on-prem capable, Arabic-primary quality, refuse-able/honest behavior; candidate validation goes on the code-switch eval set before lock-in.
+- **Generation model** — **CAG-capable and RAG-faithful, Arabic-primary, on-prem capable, selectable.** Two eval candidates, both run on the code-switch eval set before lock-in, same discipline as the bge-m3/Swan comparison:
+  - `Command R7B Arabic` (`CohereLabs/c4ai-command-r7b-12-2024`) — **quality ceiling**: 7B, 128K ctx, the model with direct Arabic **RAG-faithfulness** benchmarking (AfricaNLP 2025: instruction-following, RAG, contextual faithfulness). **License is CC-BY-NC** — usable for research/concept, but a public deployment requires a **separate commercial license from Cohere**.
+  - `Falcon-H1-Arabic 7B Instruct` (TII, 2026-01) — **commercially usable out of the box**: 256K ctx, dialect coverage incl. Egyptian, `falcon-llm-license`. Same size class, no license gate for public deployment.
+  - Locking rule: whichever candidate passes the eval on faithfulness + refusal + Arabic quality; if Command R7B wins, the lock includes the commercial license decision. Both ≥128K ctx → the CAG session frame (a 45–90 min consult ≈ 8–25K tokens) fits comfortably in either.
 - The **roster model** — federation vs single-operator (sub-decision under the trust gate).
 - **Scale targets** — patients, sessions/day, retention (feed storage sizing later).
 
 ### 8. Deployment topology
 
 - **Development:** cloud, **synthetic data only**; the full stack runs identically to production (swappable-component topology).
-- **Public deployment:** **on-prem for real data**; every locked component (Cohere ASR, pyannote, bge-m3, reranker) is on-prem capable by construction. Nothing in the v1 runtime requires a cloud API; the only cloud-touching pieces are the model-authorization gates that fetch gated weights at deploy time.
+- **Public deployment:** **on-prem for real data**; every locked component (Cohere ASR, pyannote, bge-m3, reranker) is on-prem capable by construction. The one license wrinkle is the generation model — see §7 — commute it before public go-live (commercial license for the CC-BY-NC candidate, or the Falcon candidate). Nothing in the v1 runtime requires a cloud API; the only cloud-touching pieces are the model-authorization gates that fetch gated weights at deploy time.
 - **Data boundary:** real PHI never crosses the premises boundary in a public deployment; the boundary is enforced by topology, not by policy.
 - **The trust gate is a service** — authorization lives between every surface and the store; no request reaches retrieval without a grant check.
 - v2+ captioner layer (scans) must slot into this topology later **without re-architecting** — it is a new ingestion path over the same store, gated by the same trust gate.
@@ -212,7 +236,9 @@ Runtime picks (locked): Cohere Transcribe Arabic 07-2026 (transformers/vLLM, ≤
 - Refusal assertions: a question about a non-granted patient, or a non-granted field, yields the typed refusal — and never a fabricated answer.
 - Language assertions: answers default Arabic-primary; Latin drug names pass through unchanged.
 - **Normalization-invariance:** the same query in diacritized vs undiacritized / alef-variant forms retrieves the same evidence (proves the normalization contract).
-- **Code-switch retrieval set:** the 50–100-query Arabic+English medical eval set (the only evidence for that slice — no public benchmark exists) is a first-class fixture used at this seam.
+- **Code-switch retrieval set:** the 50–100-query Arabic+English medical eval set (the only evidence for that slice — no public benchmark exists) is a first-class fixture used at this seam. It carries the layer-level A/B variants as scored assertions: contextual-enrichment on vs off, RRF vs weighted-convex fusion, and signal-weighting by query type.
+- **Session-primary (CAG) assertions:** a purely in-session question is answered with **zero history tool invocations** — the `AuditEvent.tool_call_seq` for that request proves no history retrieval happened, and every citation resolves to a turn inside the session frame. A cross-session question (e.g. "what did he take in March") must route to history and cite real prior-session turns.
+- **Audit assertions:** every ask emits an AuditEvent recording frame + tool_call_seq; a revoked grant produces no event with an upstream grant.
 
 **Modules tested:** generation (at the seam), retrieval pipeline (behind the seam via the same fixtures), ingestion stages (unit-level), trust gate (unit-level: grant lifecycle + revocation immediacy + audit completeness), store (relational invariants: no facts without a session; no draft prescriptions).
 
@@ -240,5 +266,6 @@ Runtime picks (locked): Cohere Transcribe Arabic 07-2026 (transformers/vLLM, ≤
 - Every locked number in this spec is from a **proxy corpus**; the accuracy-gate milestones are explicitly the missing-evaluation problem the concept build converts into evidence: in-room WER, real-ticket HTR, the code-switch retrieval set.
 - Role labels (doctor vs patient) start as a heuristic and are **hand-validated on ~10 sessions** before retrieval consumes them; DER and WER are different quantities, and label correctness is verified by hand, not assumed.
 - Capture hygiene (dual-lapel two-channel, prescription photo conditioning) is product-level quality, cheaper than any model change.
-- Where a lock is held open (HTR engine, generation model, roster model), it is tagged in this spec; build sessions must not silently substitute a model free of those criteria.
+- Where a lock is held open (HTR engine, generation model, roster model), it is tagged in this spec; build sessions must not silently substitute a model free of those criteria. The generation-model choice carries a **license** dimension alongside quality — the eval scores and the deployment license gate are decided together, not separately.
+- The 2026-09-13 review-pass refined chunking/retrieval/generation without re-opening locked research decisions: turn-level stays; CAG session-primary removes retrieval risk where it was most likely to matter; the summary tier is confined to the async brief; late chunking is rejected on the same license logic already applied to the generation model.
 - Next build session: build against this spec, test at the middle-layer seam, and use the fixture-patient-memory pattern from the start.
