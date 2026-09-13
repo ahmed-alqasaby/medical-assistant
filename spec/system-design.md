@@ -3,6 +3,7 @@
 *Status: ready-for-agent. Synthesized from the wayfinder map and locked research decisions (see `research/*.md`). Terms follow `CONTEXT.md`; the four research decision docs are normative where this spec compresses them.*
 *rev. 2026-09-13 — review-pass refinements incorporated: CAG session-primary hybrid, chunk-enrichment + retrieval-index choices, generation-model candidates, tool-trace audit.*
 *rev. 2026-09-13 (2) — risk register added (§9) + parameter ledger (`research/parameter-ledger.md`): every tunable is `[prior]` and unmeasured until its eval lands; RAPTOR summary tier explicitly unimplemented-by-design.*
+*rev. 2026-09-13 (3) — tool contract pinned (§6.4): single `retrieve_history` tool, ≤2 calls, structural enforcement, citable result shape; doc-id registry + FileStore linkage (§3); `…/records/{doc_id}/artifact` endpoint (§7) so every citation resolves to the real file.*
 
 ---
 
@@ -127,8 +128,8 @@ MedicalSession     { id, patient, practice, occurred_at, recording_ref, status }
 Turn               { patient, session, seq, speaker: "doctor"|"patient",
                      start_ms, end_ms, text, lang: "ar"|"en", asr_confidence }
 ConfirmedPrescription { id, session, drug, dose, frequency, duration, instructions,
-                     confirmed_by, confirmed_at }                          // ONLY post-HITL
-LabResult          { id, session, panel, value, unit, ref_range, recorded_at }
+                     confirmed_by, confirmed_at, photo_ref }        // ONLY post-HITL; photo_ref = provenance
+LabResult          { id, session, panel, value, unit, ref_range, recorded_at, sheet_ref }
 AccessGrant        { patient, practice, granted_at, granted_from, revoked_at?, scope }
 AuditEvent         { patient, actor, action, turn_ref?, frame?, tool_call_seq, occurred_at }
                      // frame = the context frame served (e.g. whole session S); tool_call_seq = ordered
@@ -147,6 +148,7 @@ Rules enforced by the store, not by convention:
 - No global or cross-patient query surface exists in the storage layer.
 - **Scans are metadata-only records.** A ScanRecord holds the stored file reference and the source turn that discussed it; it is never embedded, captioned, or retrieved as content. The prescription **photo** behaves the same — audit/provenance link, never embedded (mirror of the unconfirmed-draft rule).
 - ConfirmedPrescription and LabResult rows additionally carry a **normalized text template** (§6.2) so structured records participate in retrieval both as fields and as indexed text.
+- **Doc-id registry:** every retrievable row exposes a stable composite id `patient/session/type/seq` (e.g. `pat_7/sess_12/turn/034`) — it is the vector-index id, the citation key, and the artifact-resolver key, all one key. The embedded copy is **disposable**: **never serve content from the index**; the canonical row is re-read at answer time, and its original artifact (recording WAV, rx photo, lab sheet, scan file) lives in a per-premises **FileStore** referenced by `recording_ref` / `photo_ref` / `sheet_ref` / `stored_ref`. Blobs are never embedded.
 
 ### 4. The trust gate
 
@@ -187,7 +189,11 @@ Cross-cutting contracts:
    - **`lab_results`** and **`confirmed_prescriptions`** — the same embeddings over their **normalized text templates** (e.g. a prescription renders as a drug/dose/frequency/duration sentence), so structured records are hit by hybrid retrieval *and* by direct field queries. Templating follows the §6.3 normalization contract.
    - **`scans`** — a **metadata-only** collection: never embedded, never captioned; found only transitively via the `source_turn` pointer when the discussing transcript turn is retrieved. Prescription **photos** are audit/provenance links, never embedded.
 3. **Hybrid fusion** — bge-m3's three internal signals (dense / sparse / multi-vector) are **weighted by query type**, not uniformly: Latin-token queries (drug names) boost sparse; long-form semantic Arabic boosts dense; short queries use late-interaction. Cross-collection results fuse with **Reciprocal Rank Fusion** (default), A/B-tested against a simple weighted convex combination on our eval set before lock-in — fusion mode and the per-type weights are `[prior]` ledger items (§9/R1).
-4. **Thin agentic orchestration** — one history tool (§5 router); every tool call scoped per patient and per grant; every claim cited; refusal outside the grant. The tool-call sequence is written to the AuditEvent, not reconstructed after the fact.
+4. **Thin agentic orchestration — the tool contract.** Exactly one tool exists: `retrieve_history(query, collection?, top_k?)`, executed by service code, never by the model. The loop is `model → tool_call → service executes → result appended → model continues`; hard cap of **≤2 tool calls per request**; the ordered sequence (plus the served frame) is written to the AuditEvent at request time, never reconstructed. Enforcement is structural, not prompted:
+   - the tool is deterministic code scoped per patient and per grant; every invocation re-checks the grant (no cached authz) — a revoked grant is a hard no-op;
+   - it is **read-only** — it cannot write, and argument validation runs before execution;
+   - it returns typed results with citation fields (`doc_id`, `collection`, `quoted`, `speaker`, `start_ms`, `end_ms`, `lang`, `asr_confidence`), never raw internals;
+   - refusal outside the grant is a typed refusal, never a tool error.
 
 **Normalization contract (non-negotiable):** identical preprocessing on the **index** and **query** sides — remove diacritics, unify alef variants (أ/إ/آ → ا), teh-marbuta (ة → ه), yaeh (ى → ي), strip tatweel/kashida. ASR output is undiacritized, so this is load-bearing for retrieval quality. Applied once for both the bge-m3 inputs and the template strings.
 
@@ -203,6 +209,7 @@ Public contract (all behind the trust gate):
 | `POST /v1/patients/{id}/ask` | generation | live grounded Q&A, citations |
 | `POST /v1/patients/{id}/explain` | generation | plain-language lens |
 | `GET /v1/patients/{id}/audit` | gate | what a doctor saw |
+| `GET /v1/patients/{id}/records/{doc_id}/artifact` | gate | the real file behind a citation: turns → WAV snippet at `[start,end]`; rx → original photo; scan → stored file (not interpretable) |
 
 Runtime picks (locked): Cohere Transcribe Arabic 07-2026 (transformers/vLLM, ≤8 GB GPU class), pyannote `community-1` (k=2), `bge-m3` + `bge-reranker-v2-m3` (sentence-transformers / TEI / vLLM), the prescription HTR engine **held behind our eval** (Azure DI or fine-tuned trOCR), the patient memory store = the relational schema of §3.
 
