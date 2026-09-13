@@ -7,6 +7,38 @@
 
 ---
 
+## Milestone: Graduation Project — the medical assistant's first release
+
+There is **one product** in this repo: the per-patient medical memory assistant of §1–§9. The graduation milestone is its **first release**, conformed to the Level 2 Summer Training / Graduation Project assignment while *still being the same idea* — not a different product. The assignment's notebook/embedding/retrieval work IS spec §6; the FastAPI backend IS the §7 ask-surface spine; the frontend IS the practice chat UI. ARCH-* tickets (§1–§9) deepen this same spine to the full v1 product after submission.
+
+**Assignment** (student guide): build a complete AI product, raw documents → deployed RAG web app, on GitHub. **6-day build / 4-day deadline**. **Track: Extended** — Core RAG pipeline + a CV component. Our Microsoft OCR prescription-photo path satisfies the CV component and IS the seed of the ARCH-7 prescription route.
+
+The build reuses the research decisions directly: bge-m3 + typed collections + turn-level chunking discipline (§6), the citation-resolves-to-a-real-source contract (§5), Arabic-primary (§5), index/query normalization (§6), Azure DI / Microsoft OCR for the handwritten-prescription images (ARCH-7 precursor). What the milestone does **not** implement yet (lands in ARCH-*): per-patient memory + grants (trust gate), CAG session-primary hybrid, multi-collection typed indexes as a service, the `retrieve_history` tool contract, diarized session audio, on-prem topology. The paper/pipeline shape stays: notebook → persisted vector store → FastAPI → Streamlit → GitHub.
+
+**Deliverables checklist** (grading-driven; the grounding/citation contract IS the #1 pitfall guard — *"answers from the LLM's own knowledge instead of the retrieved context"* loses points, and this spec was built to forbid exactly that):
+
+- [ ] `notebooks/rag_pipeline.ipynb` — runs top-to-bottom (Kernel → Restart & Run All), chunking, embeddings, retrieval testing, evaluation results table
+- [ ] `backend/` — FastAPI with `GET /health` + `POST /query`, `.env.example`, pinned `requirements.txt`, passing pytest (happy + 422)
+- [ ] `frontend/` — chat UI (Streamlit/Gradio) showing the cited answer; backend URL from env var, never hard-coded; loading + error states
+- [ ] Persisted vector store produced by the notebook, served by the backend (no rebuild at request time)
+- [ ] Root README.md a stranger can clone and run (overview, architecture, stack, setup, API reference, evaluation, screenshots)
+- [ ] Public GitHub repo, clean history (no `.venv`, `.env`, corpus dump, oversized store)
+- [ ] End-to-end demo: question → API → retrieval → LLM → grounded cited answer on screen
+- [ ] Live demo + recorded video (final presentation)
+
+**Phase map** (assignment → tickets on the tracker, M-*):
+
+| Phase | Assignment says | Ticket |
+|---|---|---|
+| P0/1 | Env + domain + data collection (medical corpus; Extended: rx-image set) | M1 |
+| P2 | Notebook: load, chunk, embed, Chroma, retrieve, prompt, eval (≥10 questions + table), export | M2 |
+| P3 | FastAPI backend: `/health`, `POST /query`, startup load, CORS, ≥2 tests | M3 |
+| P4 | Frontend (Streamlit/Gradio): chat, citations, env-driven URL, loading/error | M4 |
+| P5 | Publish: `.gitignore`, public repo, README | M5 |
+| Presentation | Live demo + recorded video | M6 |
+
+---
+
 ## Problem Statement
 
 Doctor–patient sessions happen **in person** in Egyptian/GCC grassroots clinics. The content of a session — the conversation, the handwritten prescription (روشتة), the lab results — lives on paper and in the doctor's memory. There is no per-patient digital record a doctor can read before a consult, nothing to interrogate during one, and nothing the patient can carry across practices. A telehealth platform cannot fix this: the session has no platform channel at all — it is a room and a paper ticket.
@@ -287,3 +319,4 @@ The architecture is design-time reasoning. **No parameter has been measured agai
 - Where a lock is held open (HTR engine, generation model, roster model), it is tagged in this spec; build sessions must not silently substitute a model free of those criteria. The generation-model choice carries a **license** dimension alongside quality — the eval scores and the deployment license gate are decided together, not separately (systemic: risk register §9/R2).
 - The 2026-09-13 review-pass refined chunking/retrieval/generation without re-opening locked research decisions: turn-level stays; CAG session-primary removes retrieval risk where it was most likely to matter; the summary tier is confined to the async brief and is explicitly **unimplemented-by-design** (§9/R3); late chunking is rejected on the same license logic already applied to the generation model. Every parameter the pass touched is `[prior]` until the eval program (spec §9/R1, `research/parameter-ledger.md`) measures it.
 - Next build session: build against this spec, test at the middle-layer seam, and use the fixture-patient-memory pattern from the start.
+- **Milestone ↔ ARCH mapping:** tickets M1–M5 (grad release) and ARCH-1…ARCH-10 (full v1) are the **same product**. M2 is §6's retrieval backbone; M3 is the §7 ask-surface spine; M4 is the chat UI; the ARCH tickets deepen this spine — per-patient memory, trust gate, CAG, tool contract, diarized ingest, HITL prescription confirm (seeded by M2's Microsoft OCR), on-prem topology. No generic document assistant exists anywhere in the plan.
