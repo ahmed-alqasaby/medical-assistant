@@ -186,12 +186,16 @@ class VectorStore:
         docs = [c.text for c in chunks]
         metas = [dict(c.metadata) for c in chunks]
         embs = self._embedder.embed(docs)
-        coll.upsert(
-            ids=ids,
-            embeddings=[e.tolist() for e in embs],
-            documents=docs,
-            metadatas=metas,
-        )
+        # chroma enforces a max batch; embed all at once but upsert in slices
+        # so large corpus builds never trip the batch cap (they still persist
+        # atomically-ish per slice; the notebook batches identically).
+        for start in range(0, len(chunks), 500):
+            coll.upsert(
+                ids=ids[start:start + 500],
+                embeddings=[e.tolist() for e in embs[start:start + 500]],
+                documents=docs[start:start + 500],
+                metadatas=metas[start:start + 500],
+            )
 
     def persist(self) -> str:
         """Chromadata lives on disk via PersistentClient; return the export

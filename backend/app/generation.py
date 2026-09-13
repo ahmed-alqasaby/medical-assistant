@@ -69,10 +69,17 @@ class LlmSurface(Protocol):
     def complete(self, prompt: str, temperature: float = 0.2) -> str: ...
 
 
+class LlmUnavailableError(RuntimeError):
+    """Ollama is down/misconfigured. The Answerer converts this into a typed
+    refusal — never a raw HTTP 5xx."""
+
+
 class OllamaLlm:
     """Ollama generation client. ``host``/``model`` come from config/env — the
     backend must never hard-code either. Lazy connection on first call so a
-    CPU-only box can import the module without touching Ollama."""
+    CPU-only box can import the module without touching Ollama. A down/missing
+    Ollama raises ``LlmUnavailableError`` so the Answerer can turn it into a
+    typed refusal — never a raw 5xx."""
 
     def __init__(self, host: str = "http://localhost:11434", model: str = "command-r7b") -> None:
         self._host = host.rstrip("/")
@@ -81,13 +88,20 @@ class OllamaLlm:
     def complete(self, prompt: str, temperature: float = 0.2) -> str:
         import httpx
 
-        resp = httpx.post(
-            f"{self._host}/api/generate",
-            json={"model": self._model, "prompt": prompt, "stream": False, "temperature": temperature},
-            timeout=120.0,
-        )
-        resp.raise_for_status()
-        return resp.json()["response"]
+        try:
+            resp = httpx.post(
+                f"{self._host}/api/generate",
+                json={"model": self._model, "prompt": prompt, "stream": False, "temperature": temperature},
+                timeout=120.0,
+            )
+        except httpx.HTTPError as exc:
+            raise LlmUnavailableError(f"cannot reach Ollama at {self._host}: {exc}") from exc
+        if resp.status_code >= 400:
+            raise LlmUnavailableError(f"Ollama error {resp.status_code}: {resp.text[:200]}")
+        try:
+            return resp.json()["response"]
+        except (ValueError, KeyError) as exc:
+            raise LlmUnavailableError(f"Ollama returned a malformed response: {exc}") from exc
 
 
 class DeterministicLlm:
@@ -169,7 +183,15 @@ class Answerer:
                 refuse_reason=self._gate.reason(rows),
             )
         prompt = build_prompt(question, rows, language=language)
-        text = self._llm.complete(prompt, temperature=temperature).strip()
+        try:
+            text = self._llm.complete(prompt, temperature=temperature).strip()
+        except LlmUnavailableError as exc:
+            return GeneratedAnswer(
+                answer="",
+                citations=[],
+                refused=True,
+                refuse_reason=f"generation model unavailable: {exc}",
+            )
         if not text or text.upper().startswith("REFUSAL"):
             return GeneratedAnswer(
                 answer="",

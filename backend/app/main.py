@@ -45,8 +45,28 @@ def build_app(
     single place the store is created/loaded in the running app."""
 
     cfg = settings or Settings()
-    store = store or VectorStore(persist_dir=str(cfg.vector_store_path), embedder=BgeM3Embedder())
-    answerer = Answerer(llm=llm or OllamaLlm(host=cfg.ollama_url, model=cfg.ollama_model), gate=GroundingGate(min_score=min_score))
+    if store is None:
+        # Production: bge-m3 (the Kaggle notebook index side). Demo mode
+        # (EMBED_MODEL=TEST / "") swaps in the deterministic embedder so a
+        # CPU-only box can run the full stack without downloading any model.
+        if cfg.is_demo_embedder:
+            from .retrieval import DeterministicEmbedder
+
+            embedder: Any = DeterministicEmbedder()
+        else:
+            embedder = BgeM3Embedder()
+        store = VectorStore(persist_dir=str(cfg.vector_store_path), embedder=embedder)
+
+    if llm is None:
+        if cfg.is_demo_embedder:
+            # Demo mode: extractive grounded answer (top cited chunk), the
+            # same deterministic fallback the notebook uses — no Ollama needed.
+            from .generation import DeterministicLlm
+
+            llm = DeterministicLlm()
+        else:
+            llm = OllamaLlm(host=cfg.ollama_url, model=cfg.ollama_model)
+    answerer = Answerer(llm=llm, gate=GroundingGate(min_score=min_score))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
