@@ -1,8 +1,7 @@
 """Typed vector retrieval over a persisted Chroma store (§6 milestone spine).
 
 The heavy work — embedding the whole medical corpus with bge-m3 and building
-the store — runs in the Kaggle notebook for the weak-GPU constraint (§1 rev /
-graduation milestone). The backend only needs to:
+the store — runs in the phase-2 build notebook (`notebooks/rag_pipeline.ipynb`). The backend only needs to:
   1. load the persisted store at startup (§7 "load once at startup, never per request")
   2. embed the single incoming query (bge-m3; ~1 s on CPU)
   3. retrieve top-k typed rows with citation fields + a cosine score the
@@ -109,19 +108,24 @@ class BgeM3Embedder(Embedder):
     """bge-m3 via sentence-transformers (§6 locked). Loads LAZILY on first
     embed so a CPU-only box can import this module without pulling the model.
     This exact class is the one canonical embedder in production — the SAME
-    model in the Kaggle notebook (index side) and in the backend (query side);
+    model in the phase-2 notebook (index side) and in the backend (query side);
     never two embedders for one product."""
 
-    def __init__(self, model_name: str = "BAAI/bge-m3") -> None:
+    def __init__(self, model_name: str = "BAAI/bge-m3", device: str | None = None) -> None:
         super().__init__(dim=None)
         self._model_name = model_name
+        self._device = device
         self._model = None
 
     def _lazy(self):
         if self._model is None:
             from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(self._model_name)
+            # bge-m3 (non-CL) — same trust_remote_code knob the notebook uses.
+            kw: dict = {"trust_remote_code": True}
+            if self._device:
+                kw["device"] = self._device  # "cpu" keeps the GPU for Ollama
+            self._model = SentenceTransformer(self._model_name, **kw)
             self._dim = self._model.get_sentence_embedding_dimension()
         return self._model
 
@@ -134,7 +138,7 @@ class BgeM3Embedder(Embedder):
 class VectorStore:
     """Typed-collections store over a persisted Chroma dir.
 
-    The SAME class runs on the build side (Kaggle notebook: embed whole corpus
+    The SAME class runs on the build side (phase-2 notebook: embed whole corpus
     + persist) and the query side (backend: load persisted store + embed ONE
     query). Only the embedder instance differs (bge-m3 both sides in prod)."""
 
@@ -158,12 +162,15 @@ class VectorStore:
         startup, never per request" (§7). Chroma's PersistentClient reopens the
         on-disk dir lazily, so "loaded" is the flag that says startup ran;
         index data comes back on the first query. Idempotent: calling twice is
-        safe."""
+        safe, and reloading after ``close()`` (e.g. a notebook re-runs a cell)
+        flips the flag back on."""
+        self._loaded = True
 
     def close(self) -> None:
         """Shutdown seam. PersistentClient persists to disk on its own; close
-        just clears the loaded flag and lets the client GC. Never called per
+        clears the loaded flag and lets the client GC. Never called per
         request."""
+        self._loaded = False
 
     def is_loaded(self) -> bool:
         return self._loaded
@@ -178,11 +185,24 @@ class VectorStore:
             metadata={"hnsw:space": "cosine"},  # cosine distance for normalized bge-m3
         )
 
-    # -- build side (Kaggle notebook) ----------------------------------------
+    # -- build side (phase-2 notebook) --------------------------------------------
+
+    def reset(self) -> None:
+        """Drop the collection so a rebuild (e.g. different embedder/dim)
+        starts clean. Chroma locks a collection's vector dimension at first
+        write, so a demo build can never overwrite a real bge-m3 store — or
+        vice versa — without dropping it first."""
+        try:
+            self._client.delete_collection(self._collection)
+        except Exception:
+            pass  # collection missing -> nothing to drop
 
     def add_documents(self, chunks: Sequence[DocumentChunk]) -> None:
         coll = self._coll()
-        ids = [c.doc_id for c in chunks]
+        # The atomic unit in the store is the CHUNK: ids are chunk_ids so a
+        # document that splits into several over-budget chunks stays unique (a
+        # long row's pieces share one doc_id but each gets its own chunk_id).
+        ids = [c.chunk_id for c in chunks]
         docs = [c.text for c in chunks]
         metas = [dict(c.metadata) for c in chunks]
         embs = self._embedder.embed(docs)

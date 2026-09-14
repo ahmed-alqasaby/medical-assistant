@@ -14,7 +14,12 @@ import os
 
 import streamlit as st
 
-from frontend.client import BackendClient, BackendError
+try:
+    # repo-root import (pytest from the rootdir, uvicorn-style layering)
+    from frontend.client import BackendClient, BackendError
+except ModuleNotFoundError:
+    # streamlit puts the script's own directory (frontend/) on sys.path
+    from client import BackendClient, BackendError
 
 st.set_page_config(page_title="Medical Assistant", page_icon="🩺", layout="centered")
 

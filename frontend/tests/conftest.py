@@ -16,6 +16,26 @@ from backend.app.retrieval import DeterministicEmbedder, VectorStore
 from backend.app.generation import DeterministicLlm
 
 
+def _row_chunk(doc_id, section, text, lang, source) -> DocumentChunk:
+    """Notebook-shaped row chunk (cell 5 metadata contract)."""
+    return DocumentChunk(
+        doc_id=doc_id,
+        collection="medical_docs",
+        seq=0,
+        section=section,
+        text=text,
+        metadata={
+            "doc_id": doc_id,
+            "collection": "medical_docs",
+            "section": section,
+            "seq": 0,
+            "chunk_id": f"{doc_id}/000000",
+            "lang": lang,
+            "source": source,
+        },
+    )
+
+
 @pytest.fixture
 def store(tmp_path) -> VectorStore:
     s = VectorStore(
@@ -25,29 +45,26 @@ def store(tmp_path) -> VectorStore:
     s.load()
     s.add_documents(
         [
-            DocumentChunk(
-                doc_id="rx-001",
-                collection="rx_photos",
-                seq=0,
-                section="dispensing",
-                text="دواء الأسبيرين (ASA) 100 ملغ يُؤخذ قرصاً واحداً يومياً بعد الطعام.",
-                metadata={"doc_id": "rx-001", "collection": "rx_photos", "section": "dispensing"},
+            _row_chunk(
+                "ma::rx__all_prescriptions_clean_json::000000",
+                "dispensing",
+                "دواء الأسبيرين (ASA) 100 ملغ يُؤخذ قرصاً واحداً يومياً بعد الطعام.",
+                "ar",
+                "rx/all_prescriptions_clean.json",
             ),
-            DocumentChunk(
-                doc_id="rx-002",
-                collection="rx_photos",
-                seq=0,
-                section="dispensing",
-                text="باراسيتامول: الحد الأقصى 4 غرام يومياً للبالغين، لا يتجاوز 8 أقراص من 500 ملغ.",
-                metadata={"doc_id": "rx-002", "collection": "rx_photos", "section": "dispensing"},
+            _row_chunk(
+                "ma::rx__all_prescriptions_clean_json::000001",
+                "dispensing",
+                "باراسيتامول: الحد الأقصى 4 غرام يومياً للبالغين، لا يتجاوز 8 أقراص من 500 ملغ.",
+                "en",
+                "rx/all_prescriptions_clean.json",
             ),
-            DocumentChunk(
-                doc_id="rx-003",
-                collection="medical_guidelines",
-                seq=0,
-                section="hypertension",
-                text="الميتفورمين يُبدأ بـ 500 ملغ مرة واحدة يومياً مع الوجبات لتقليل أعراض الجهاز الهضمي.",
-                metadata={"doc_id": "rx-003", "collection": "medical_guidelines", "section": "hypertension"},
+            _row_chunk(
+                "ma::en__medquad_csv::000002",
+                "hypertension",
+                "الميتفورمين يُبدأ بـ 500 ملغ مرة واحدة يومياً مع الوجبات لتقليل أعراض الجهاز الهضمي.",
+                "ar",
+                "en/medquad.csv",
             ),
         ]
     )

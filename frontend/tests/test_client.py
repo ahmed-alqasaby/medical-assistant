@@ -53,3 +53,25 @@ def test_query_exposes_empty_question_as_backend_error(client) -> None:
 def test_connection_refused_is_a_backend_error(noclient) -> None:
     with pytest.raises(BackendError):
         asyncio.run(noclient.query("هل تعمل؟"))
+
+
+def test_typed_refusal_is_a_success_payload_not_an_error(tmp_path) -> None:
+    """M4 acceptance: refusal arrives as refuse=True in a 200 response body —
+    the UI must render it as an honest 'I don't know', not crash or throw."""
+    import httpx
+
+    from backend.app.main import build_app
+    from backend.app.retrieval import DeterministicEmbedder, VectorStore
+    from backend.app.generation import DeterministicLlm
+
+    empty = VectorStore(
+        persist_dir=str(tmp_path / "empty-chroma"),
+        embedder=DeterministicEmbedder(dim=64, n_gram=3),
+    )
+    empty.load()
+    app = build_app(store=empty, llm=DeterministicLlm(), min_score=0.35)
+    c = BackendClient("http://testserver", transport=httpx.ASGITransport(app=app))
+    body = asyncio.run(c.query("ما هي تعاليم الطب الصيني؟"))
+    assert body["refuse"] is True
+    assert body["answer"] == ""
+    assert "no grounded context" in (body.get("refuse_reason") or "")

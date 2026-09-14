@@ -6,15 +6,18 @@ from retrieval to generation.
 
 - **Frontend** — Streamlit chat app (question → cited answer on screen).
 - **Backend** — FastAPI RAG service (retrieval + grounding gate + generation).
-- **Model pipeline** — a runnable Kaggle notebook that builds the vector store
-  (bge-m3 dense + sparse) from the corpora and exports the store + eval.
+- **Model pipeline** — `notebooks/rag_pipeline.ipynb`, a runnable **phase-2
+  notebook** that chunks the corpora with the app's own chunker, builds and
+  persists the vector store (bge-m3 dense; deterministic embedder in demo mode)
+  into `data/vector_store/chroma`, stamps an `export_manifest.json`, and
+  evaluates retrieval + grounded generation.
 - **Corpus** — Arabic medical Q&A (`ar/`), MedQuad English (`en/`), Egyptian
   prescription OCR images (`rx/`, `rx_ocr/`).
 
 ```
 ┌────────────┐   ┌────────────────────┐   ┌───────────────────────────┐
 │  Streamlit │──▶│  FastAPI backend   │──▶│  Chroma store (cosine)    │
-│  chat app  │   │  RAG + trust gate  │   │  bge-m3 dense + sparse    │
+│  chat app  │   │  RAG + trust gate  │   │  bge-m3 dense             │
 └────────────┘   │                    │   └───────────────────────────┘
                  │  Gate: citations   │   ┌───────────────────────────┐
                  │  from store only   │──▶│  Ollama (command-r7b)     │
@@ -29,10 +32,10 @@ from retrieval to generation.
 | Chat UI | Streamlit |
 | API | FastAPI + Uvicorn |
 | Vector store | Chroma (hnsw:space = cosine), `medical_docs` collection |
-| Embeddings | BAAI/bge-m3 (dense + sparse), deterministic embedder for CPU demo |
+| Embeddings | BAAI/bge-m3 dense, deterministic embedder for CPU demo |
 | Generation | Ollama (`command-r7b-arabic`), extractive fallback in demo mode |
 | Data | Arabic medical QA, MedQuad (EN), Egyptian Rx OCR datasets |
-| Tests | pytest (38) — seam-tested with deterministic doubles, never real models |
+| Tests | pytest — seam-tested with deterministic doubles, never real models |
 
 ## Setup (clone → run)
 
@@ -46,13 +49,10 @@ uv pip install --python .venv/bin/python -r requirements.txt \
 
 ### Quickstart (CPU-only, no model downloads)
 
-1. Build a small demo store from the corpus (deterministic embedder —
-
-   ~10k chunks, a few seconds):
-
-   ```bash
-   .venv/bin/python scripts/build_store.py
-   ```
+1. Build the store from the corpus — run `notebooks/rag_pipeline.ipynb`
+   top-to-bottom (defaults: deterministic demo embedder, ~11k chunks, no GPU,
+   a few seconds per section; persists to `data/vector_store/chroma` +
+   `export_manifest.json`). No Kaggle account or credentials needed.
 
 2. Start the API in demo mode:
 
@@ -72,10 +72,10 @@ The full stack runs with zero GPU and zero model downloads.
 
 ### Production path (bge-m3 + Ollama)
 
-1. Run `notebooks/kaggle_rag_pipeline.ipynb` on Kaggle (full corpus, bge-m3)
-   and download the exported Chroma store + `sparse_index.json` to
-   `data/vector_store/chroma` (Kaggle creds in `~/.kaggle/access_token`,
-   see `scripts/kaggle_connect.sh`).
+1. Run `notebooks/rag_pipeline.ipynb` top-to-bottom with
+   `EMBED_MODEL=BAAI/bge-m3` (and `EMBED_DEVICE=cpu` to keep the GPU for
+   Ollama) — it rebuilds `data/vector_store/chroma` with real bge-m3 vectors
+   and marks the manifest `demo_store: false`.
 2. Create a repo-root `.env` (see `backend/.env.example`) and start Ollama with
    the model:
    ```bash
@@ -114,20 +114,24 @@ The full stack runs with zero GPU and zero model downloads.
 | `BACKEND_URL` | — (required) | Frontend → API base URL; never hard-coded |
 | `VECTOR_STORE_PATH` | `data/vector_store/chroma` | Chroma persist dir |
 | `EMBED_MODEL` | `BAAI/bge-m3` | `TEST`/`` → deterministic demo embedder |
+| `EMBED_DEVICE` | (auto) | `cpu` keeps a weak GPU for Ollama |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | `http://localhost:11434` / `command-r7b-arabic` | Generation |
 | `MIN_SCORE` | `0.35` | Grounding-gate citation threshold |
 
 ## Evaluation
 
-The notebook evaluates the pipeline over ≥10 curated questions — in-domain
-Arabic and English samples plus out-of-context refusals — writing
-`eval_results.csv` (grounding, refusal behavior, citation scores). Results are
-exported with the store and reported in `docs/adr/` / the M6 presentation.
+`notebooks/rag_pipeline.ipynb` (§2.6) evaluates the pipeline over ≥10 curated
+questions — in-domain Arabic and English samples plus out-of-context refusals —
+through the same `Answerer` the backend uses, writing `eval_results.csv`
+(grounding, refusal behavior, citation scores) beside the store. The
+notebook-contract drift guard (`tests/test_notebook_contract.py`) proves the
+app and the notebook share every constant (collection, model, thresholds,
+store path, chunk/metadata scheme).
 
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q      # 38 tests: env contract, corpus, backend API, frontend client
+.venv/bin/python -m pytest -q    # env contract, corpus, notebook contract, backend API, frontend client
 ```
 
 ## Screenshots

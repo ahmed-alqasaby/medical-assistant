@@ -46,7 +46,7 @@ def build_app(
 
     cfg = settings or Settings()
     if store is None:
-        # Production: bge-m3 (the Kaggle notebook index side). Demo mode
+        # Production: bge-m3 (the phase-2 notebook index side). Demo mode
         # (EMBED_MODEL=TEST / "") swaps in the deterministic embedder so a
         # CPU-only box can run the full stack without downloading any model.
         if cfg.is_demo_embedder:
@@ -54,7 +54,7 @@ def build_app(
 
             embedder: Any = DeterministicEmbedder()
         else:
-            embedder = BgeM3Embedder()
+            embedder = BgeM3Embedder(device=cfg.embed_device)
         store = VectorStore(persist_dir=str(cfg.vector_store_path), embedder=embedder)
 
     if llm is None:

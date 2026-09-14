@@ -28,8 +28,10 @@ class DocumentChunk:
 
     @property
     def chunk_id(self) -> str:
-        """Stable, citable chunk id: doc-id + seq (spec §3 doc-id registry)."""
-        return f"{self.doc_id}/{self.seq:03d}"
+        """Stable, citable chunk id: doc-id + seq (spec §3 doc-id registry).
+        Same zero-padding as the notebook's ``chunk_row`` (``ma::…::000000``)
+        so both index paths emit identical chunk-id strings."""
+        return f"{self.doc_id}/{self.seq:06d}"
 
     def citation(self) -> dict:
         """The citation shape a grounded answer must resolve to (models.Citation)."""
@@ -88,12 +90,12 @@ def _split_long(paragraph: str) -> list[str]:
     pieces: list[str] = []
     buffer = ""
     for token in paragraph.split(" "):
-        token = _hard_split(token)
-        if len(buffer) + len(token) + 1 > _MAX_CHARS and buffer:
-            pieces.append(buffer.strip())
-            buffer = token
-        else:
-            buffer = f"{buffer} {token}".strip() if buffer else token
+        for part in _hard_split(token).split(" "):  # hard-split pieces are tokens too
+            if len(buffer) + len(part) + 1 > _MAX_CHARS and buffer:
+                pieces.append(buffer.strip())
+                buffer = part
+            else:
+                buffer = f"{buffer} {part}".strip() if buffer else part
     if buffer.strip():
         pieces.append(buffer.strip())
     return pieces

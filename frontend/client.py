@@ -28,7 +28,7 @@ class BackendClient:
         self,
         base_url: str,
         *,
-        timeout: float = 30.0,
+        timeout: float = 120.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if not base_url:

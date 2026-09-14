@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     vector_store_path: str = str(REPO_ROOT / "data" / "vector_store" / "chroma")
     embed_model: str = "BAAI/bge-m3"
+    embed_device: str | None = None  # "cpu" keeps the GPU for Ollama on small boxes
     default_collection: str = "medical_docs"
     top_k: int = 5
     min_score: float = 0.35

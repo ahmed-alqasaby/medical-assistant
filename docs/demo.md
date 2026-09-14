@@ -8,7 +8,7 @@ plus the closing presentation.
 
 ```bash
 # (optional, exact) rebuild the demo store from a fresh clone
-.venv/bin/python scripts/build_store.py
+#   -> run notebooks/rag_pipeline.ipynb top-to-bottom (deterministic demo mode)
 
 # terminal A — API in demo mode (no GPU, no Ollama needed for the walk)
 export EMBED_MODEL=TEST
@@ -45,8 +45,8 @@ ffmpeg -f x11grab -i :0 -r 24 demo.mp4   # whole screen; crop as needed
    rather than free-invent).
 5. **Under the hood (~60s)** — pane-in the backend terminal: curl `GET /health`,
    then `POST /query` with `jq` to show the JSON contract (answer/citations/
-   refuse). Then pane-in `scripts/build_store.py` output to show the *index*
-   step that feeds the whole chain.
+   refuse). Then pane-in the phase-2 notebook's store-build output to show the
+   *index* step that feeds the whole chain.
 
 ## 3. Recording checklist
 
@@ -55,17 +55,18 @@ ffmpeg -f x11grab -i :0 -r 24 demo.mp4   # whole screen; crop as needed
 - [ ] Citations **expanded on screen** for at least one answer.
 - [ ] `POST /query` JSON visible with citations array (M6 "API" beat).
 - [ ] Camera intro ≤10s, title card: *Medical Assistant — grounded Q&A*.
-- [ ] Export H.264 MP4, 1080p, ≤90 MB (Kaggle/GradCAP-friendly).
+- [ ] Export H.264 MP4, 1080p, ≤90 MB.
 
 ## 4. Presentation outline (final talk)
 
 1. **Problem** — doctors need grounded answers mid-consult; LLM free-invention
    is unacceptable in medicine. Trust gate, not confidence.
 2. **Stack in one line** — Chroma (cosine) + bge-m3 + Ollama behind a FastAPI
-   seam, a Streamlit chat, and a Kaggle-orchestrated pipeline.
+   seam, a Streamlit chat, and a notebook-orchestrated pipeline
+   (`notebooks/rag_pipeline.ipynb`).
 3. **Demo live** — the 5-step script above.
 4. **Safety** — every answer cites retrieved evidence; below-threshold and
    out-of-domain inputs are refused; generations happen only over store data
    (`backend/app/generation.py`, grounding gate).
-5. **Scale / next steps** — Kaggle full-corpus store, sparse hybrid, ASR +
+5. **Scale / next steps** — full-corpus bge-m3 store, hybrid retrieval, ASR +
    OCR session capture, patient memory (v2; see `CONTEXT.md`).
